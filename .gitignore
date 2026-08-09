@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+.env*
+!.env.example
+sokoza design ideas .zip
+public/assets/thokos store /*.png
+public/assets/thokos store /logo&cover image /*.png
