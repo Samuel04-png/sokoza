@@ -84,6 +84,19 @@ function pruneEvents(events: MarketplaceEvent[], now = Date.now()) {
   return events.filter((event) => new Date(event.occurredAt).getTime() >= oldest).slice(-5_000);
 }
 
+function sendToInstalledAnalytics(eventType: string, properties: Record<string, string | undefined>) {
+  const analyticsWindow = window as Window & {
+    dataLayer?: Array<Record<string, unknown>>;
+    clarity?: (command: "event", name: string) => void;
+  };
+  analyticsWindow.dataLayer?.push({
+    event: eventType,
+    ...properties,
+    ranking_version: RANKING_CONFIG.version,
+  });
+  analyticsWindow.clarity?.("event", eventType);
+}
+
 function sendToAuthoritativeEndpoint(event: MarketplaceEvent) {
   const body = JSON.stringify({
     eventType: event.eventType,
@@ -110,6 +123,11 @@ function sendToAuthoritativeEndpoint(event: MarketplaceEvent) {
     store_id: event.storeId,
     view_kind: event.viewKind,
     ranking_version: RANKING_CONFIG.version,
+  });
+  sendToInstalledAnalytics(event.eventType, {
+    product_id: event.productId,
+    store_id: event.storeId,
+    view_kind: event.viewKind,
   });
 }
 
@@ -207,6 +225,7 @@ export function MarketplaceSignalsProvider({ children }: { children: React.React
     }).catch(() => undefined);
     const posthog = (window as Window & { posthog?: { capture(name: string, properties: Record<string, unknown>): void } }).posthog;
     posthog?.capture(eventType, { product_id: target.productId, store_id: target.storeId, ranking_version: RANKING_CONFIG.version });
+    sendToInstalledAnalytics(eventType, { product_id: target.productId, store_id: target.storeId });
     return true;
   }, [hydrated]);
 
