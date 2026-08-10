@@ -54,7 +54,7 @@ export function HomeRichSearch({ drops = [], products = [], stores = [] }: HomeR
       label="Search products and stores"
       onQueryChange={setQuery}
       onSearch={(cleanQuery) => { signals?.captureActivity("search_submitted"); router.push(`/discover?q=${encodeURIComponent(cleanQuery)}`); }}
-      placeholder="Search real products, Stores, or size"
+      placeholder="Search SOKOZA"
       products={currentProducts}
       query={query}
       stores={currentStores}

@@ -46,6 +46,7 @@ export default async function HomePage() {
           <HomeRichSearch />
         </div>
         <Link className="home-feature" href={feature ? `/products/${feature.slug}` : "/discover"}>
+          <span className="home-feature-media">
             <SmartImage
               alt={feature ? `${feature.title}${featureStore ? `, available from ${featureStore.name}` : ""}` : "SOKOZA editorial fashion portrait"}
               fill
@@ -53,6 +54,7 @@ export default async function HomePage() {
               sizes="(max-width: 760px) 100vw, 48vw"
               src={feature?.images[0] ?? homeEditorialImage}
             />
+          </span>
             <div className="home-feature-caption">
               <span>{featureSelection?.label ?? "SOKOZA editorial"}</span>
               <strong>{feature?.title ?? "Local style, seen clearly"}</strong>
