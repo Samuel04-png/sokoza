@@ -10,6 +10,7 @@ import { canonicalVariantAvailability, hasSellableVariant } from "@/lib/seller-p
 import { classifyProductVibes } from "@/lib/product-vibes";
 import { classifyProductTaxonomy } from "@/lib/product-taxonomy";
 import { hasExplicitMadeHereEvidence } from "@/lib/discovery-sections";
+import { productSlug } from "@/lib/product-slug";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const storeSchema = z.object({
@@ -285,29 +286,39 @@ export async function POST(request: Request) {
         }, { status: 422 });
       }
     }
+    const { data: existingProduct, error: existingProductError } = await supabase
+      .from("products")
+      .select("id, status, slug, version")
+      .eq("id", productId)
+      .eq("store_id", session.storeId)
+      .maybeSingle();
+    if (existingProductError) return failure(existingProductError, "PRODUCT_READ_FAILED", requestId);
+
     const reduced = input.previousPrice !== undefined && input.previousPrice > input.price;
     const values = {
-      store_id: session.storeId, category_id: category.id, slug: slugify(input.title) || `piece-${productId.slice(0, 8)}`,
+      store_id: session.storeId, category_id: category.id, slug: productSlug(input.title, productId, existingProduct?.slug),
       title: input.title, description: input.description, details: input.details.map((item) => item.trim()).filter(Boolean),
       condition: condition(input.condition), regular_price: reduced ? input.previousPrice : input.price,
       promotion_price: reduced ? input.price : null, primary_colour: input.color, style_tags: input.vibes,
       occasion_tags: taxonomy.occasions, audience: input.audience, made_here: classifiedInput.madeHere,
     };
     values.style_tags = classifyProductVibes(classifiedInput);
-    let saved: { id: string; version: number } | null = null;
-    const { data: existingProduct } = await supabase.from("products").select("id, status").eq("id", productId).eq("store_id", session.storeId).maybeSingle();
+    let saved: { id: string; version: number; slug: string } | null = null;
     if (existingProduct) {
       const { store_id: _storeId, ...updateValues } = values;
       void _storeId;
       let query = supabase.from("products").update(updateValues).eq("id", productId).eq("store_id", session.storeId);
       if (input.version) query = query.eq("version", input.version);
-      const { data, error } = await query.select("id, version").maybeSingle();
-      if (error) return failure(error, "PRODUCT_SAVE_FAILED");
-      if (!data) return NextResponse.json({ error: "VERSION_CONFLICT" }, { status: 409 });
+      const { data, error } = await query.select("id, version, slug").maybeSingle();
+      if (error) return failure(error, "PRODUCT_SAVE_FAILED", requestId);
+      if (!data) {
+        const { data: current } = await supabase.from("products").select("version, status").eq("id", productId).eq("store_id", session.storeId).maybeSingle();
+        return NextResponse.json({ error: "VERSION_CONFLICT", code: "VERSION_CONFLICT", currentVersion: current?.version, currentStatus: current?.status, requestId }, { status: 409 });
+      }
       saved = data;
     } else {
-      const { data, error } = await supabase.from("products").insert({ id: productId, ...values }).select("id, version").single();
-      if (error || !data) return failure(error, "PRODUCT_SAVE_FAILED");
+      const { data, error } = await supabase.from("products").insert({ id: productId, ...values }).select("id, version, slug").single();
+      if (error || !data) return failure(error, "PRODUCT_SAVE_FAILED", requestId);
       saved = data;
     }
 
@@ -339,7 +350,23 @@ export async function POST(request: Request) {
         ? { p_product_id: productId, p_expected_version: saved.version }
         : { p_product_id: productId, p_status: input.status, p_expected_version: saved.version };
       const { data, error } = await supabase.rpc(functionName, args);
-      if (error) return failure(error, "PRODUCT_STATUS_FAILED");
+      if (error) {
+        const { data: current } = await supabase.from("products").select("version, status").eq("id", productId).eq("store_id", session.storeId).maybeSingle();
+        const typed = error.message?.match(/(VERSION_CONFLICT|PRODUCT_NOT_READY|STORE_NOT_READY|FORBIDDEN|INVALID_[A-Z_]+)/)?.[1];
+        if (typed) {
+          return NextResponse.json({
+            error: typed,
+            code: typed,
+            message: typed === "PRODUCT_NOT_READY"
+              ? "The product was saved as a draft, but publishing still needs a published Store, a photo, a complete description, a valid price and an in-stock option."
+              : undefined,
+            currentVersion: current?.version,
+            currentStatus: current?.status,
+            requestId,
+          }, { status: typed.includes("CONFLICT") ? 409 : typed === "FORBIDDEN" ? 403 : 422 });
+        }
+        return failure(error, "PRODUCT_STATUS_FAILED", requestId);
+      }
       const row = Array.isArray(data) ? data[0] : data;
       if (row?.version) saved.version = row.version;
     }
@@ -354,7 +381,7 @@ export async function POST(request: Request) {
     }
     const onboardingError = await persistOnboardingProgress(supabase, session.sellerId, parsed.data.onboarding);
     if (onboardingError) return failure(onboardingError, "ONBOARDING_SAVE_FAILED");
-    return NextResponse.json({ ok: true, id: productId, version: saved.version, variantIds });
+    return NextResponse.json({ ok: true, id: productId, version: saved.version, slug: saved.slug, variantIds });
   }
 
   if (parsed.data.operation === "set_product_status") {

@@ -172,7 +172,7 @@ export function SellerProductEditor({ productId, referenceData }: { productId?: 
     }
     const result = saveAs("published");
     if (!await flushWrites()) {
-      setPublishError("This product was not published. Review the save error and try again.");
+      setPublishError(persistenceError || "This product was not published. Review the save error and try again.");
       return;
     }
     router.push(`/seller/products/${result.id}?published=1`);

@@ -97,6 +97,8 @@ export interface StoreMutationResult {
 
 function writeMessage(code: string) {
   if (code === "VERSION_CONFLICT") return "This record changed elsewhere. Reload before saving again.";
+  if (code === "SLUG_CONFLICT") return "This product title already has a matching URL. Change the title slightly and retry.";
+  if (code === "INVALID_SELLER_UPDATE") return "One of the product fields is not valid. Check the highlighted details and retry.";
   if (code === "STORE_NOT_READY") return "Complete the Store identity, imagery, WhatsApp and fulfilment fields before publishing.";
   if (code === "PRODUCT_NOT_READY") return "This product is not ready to publish. Check its Store, photos, price, options and availability.";
   if (code === "STORE_REQUIRED") return "Create and save your Store before adding products.";
@@ -158,17 +160,34 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
         body: JSON.stringify(latestWrite),
       });
       const result = await response.json().catch(() => ({})) as Record<string, unknown>;
-      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "SAVE_FAILED");
+      if (!response.ok) {
+        if ((latestWrite.operation === "save_product" || latestWrite.operation === "set_product_status") && typeof result.currentVersion === "number") {
+          const productId = latestWrite.operation === "save_product" ? latestWrite.product.id : latestWrite.productId;
+          if (productId) commit((current) => ({
+            ...current,
+            products: current.products.map((product) => product.id === productId ? {
+              ...product,
+              version: result.currentVersion as number,
+              status: typeof result.currentStatus === "string" ? result.currentStatus as SellerStudioProduct["status"] : product.status,
+            } : product),
+          }));
+        }
+        const code = typeof result.code === "string" ? result.code : typeof result.error === "string" ? result.error : "SAVE_FAILED";
+        const message = typeof result.message === "string" ? result.message : writeMessage(code);
+        throw new Error(message);
+      }
+      errorRef.current = "";
+      setPersistenceError("");
       onSuccess?.(result);
     };
     const task = writeQueueRef.current.then(execute);
     writeQueueRef.current = task.catch((error) => {
       const code = error instanceof Error ? error.message : "SAVE_FAILED";
-      const message = writeMessage(code);
+      const message = code.includes(" ") ? code : writeMessage(code);
       errorRef.current = message;
       setPersistenceError(message);
     }).finally(() => setPendingWrites((count) => Math.max(0, count - 1)));
-  }, [persistenceEnabled]);
+  }, [commit, persistenceEnabled]);
 
   const flushWrites = useCallback(async () => {
     await writeQueueRef.current;
@@ -217,7 +236,7 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
           const savedProduct: SellerStudioProduct = {
             ...input.product,
             id: result.id,
-            slug: existing?.slug ?? slugify(input.product.title),
+            slug: typeof result.slug === "string" ? result.slug : existing?.slug ?? slugify(input.product.title),
             storeId: store.id || current.store.id,
             confirmedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -332,6 +351,7 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
       commit((current) => ({ ...current, products: current.products.map((product) => product.id === result.id ? {
         ...product,
         version: typeof response.version === "number" ? response.version : product.version,
+        slug: typeof response.slug === "string" ? response.slug : product.slug,
         variants: Array.isArray(response.variantIds) && response.variantIds.length === product.variants.length
           ? product.variants.map((variant, index) => ({ ...variant, id: String((response.variantIds as unknown[])[index]) }))
           : product.variants,
