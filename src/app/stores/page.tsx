@@ -3,7 +3,11 @@ import { catalogRepository } from "@/data/repository";
 import { StoreCard } from "@/components/store-card";
 import { EmptyState } from "@/components/empty-state";
 
-export const metadata: Metadata = { title: "Stores" };
+export const metadata: Metadata = {
+  title: "Stores",
+  description: "Browse independent Zambian fashion stores with current products and clear fulfilment information.",
+  alternates: { canonical: "/stores" },
+};
 export const revalidate = 60;
 
 export default async function StoresPage() {

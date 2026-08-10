@@ -5,6 +5,7 @@ import { catalogRepository } from "@/data/repository";
 import { SmartImage } from "@/components/smart-image";
 import { ProductGrid } from "@/components/product-card";
 import { formatDate } from "@/lib/format";
+import { absoluteUrl, safeJsonLd } from "@/lib/site";
 
 interface DropPageProps {
   params: Promise<{ slug: string }>;
@@ -15,7 +16,24 @@ export const revalidate = 60;
 export async function generateMetadata({ params }: DropPageProps): Promise<Metadata> {
   const { slug } = await params;
   const drop = await catalogRepository.getDropBySlug(slug);
-  return drop ? { title: drop.title, description: drop.subtitle } : { title: "Drop not found" };
+  return drop ? {
+    title: drop.title,
+    description: drop.subtitle,
+    alternates: { canonical: `/drops/${drop.slug}` },
+    openGraph: {
+      type: "website",
+      title: `${drop.title} · SOKOZA`,
+      description: drop.subtitle,
+      url: `/drops/${drop.slug}`,
+      images: drop.coverImage ? [{ url: drop.coverImage, alt: drop.title }] : [],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${drop.title} · SOKOZA`,
+      description: drop.subtitle,
+      images: drop.coverImage ? [drop.coverImage] : [],
+    },
+  } : { title: "Drop not found" };
 }
 
 export async function generateStaticParams() {
@@ -33,9 +51,30 @@ export default async function DropPage({ params }: DropPageProps) {
     catalogRepository.listStores(),
   ]);
   if (!store) notFound();
+  const dropUrl = absoluteUrl(`/drops/${drop.slug}`);
+  const dropJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "@id": `${dropUrl}#collection`,
+    name: drop.title,
+    description: drop.subtitle,
+    url: dropUrl,
+    image: drop.coverImage || undefined,
+    datePublished: drop.publishedAt,
+    isPartOf: { "@id": `${absoluteUrl("/")}#website` },
+    about: {
+      "@type": "ClothingStore",
+      name: store.name,
+      url: absoluteUrl(`/stores/${store.slug}`),
+    },
+  };
 
   return (
     <div className="drop-page">
+      <script
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(dropJsonLd) }}
+        type="application/ld+json"
+      />
       <section className="drop-hero">
         <SmartImage alt={`${drop.title} by ${store.name}`} fill priority sizes="100vw" src={drop.coverImage} />
         <div className="drop-hero-shade" />

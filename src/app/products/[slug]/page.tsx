@@ -5,6 +5,7 @@ import { ProductDetail } from "@/components/product-detail";
 import { ProductGrid } from "@/components/product-card";
 import { SectionHeading } from "@/components/section-heading";
 import { getSellerPreviewSession } from "@/lib/seller-session";
+import { absoluteUrl, safeJsonLd } from "@/lib/site";
 
 interface ProductPageProps {
   params: Promise<{ slug: string }>;
@@ -19,10 +20,12 @@ export async function generateMetadata({ params }: ProductPageProps): Promise<Me
     ? {
         title: product.title,
         description: product.description,
+        alternates: { canonical: `/products/${product.slug}` },
         openGraph: {
           type: "website",
           title: `${product.title} · SOKOZA`,
           description: product.description,
+          url: `/products/${product.slug}`,
           images: product.images[0] ? [{ url: product.images[0], alt: product.title }] : [],
         },
         twitter: {
@@ -62,9 +65,43 @@ export default async function ProductPage({ params }: ProductPageProps) {
         (item.storeId === product.storeId || item.vibes.some((vibe) => product.vibes.includes(vibe))),
     )
     .slice(0, 4);
+  const productUrl = absoluteUrl(`/products/${product.slug}`);
+  const productJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "@id": `${productUrl}#product`,
+    name: product.title,
+    description: product.description,
+    image: product.images,
+    category: product.category,
+    color: product.color,
+    sku: product.id,
+    itemCondition: product.condition === "New"
+      ? "https://schema.org/NewCondition"
+      : "https://schema.org/UsedCondition",
+    brand: { "@type": "Brand", name: store.name },
+    offers: {
+      "@type": "Offer",
+      url: productUrl,
+      priceCurrency: "ZMW",
+      price: product.price.toFixed(2),
+      availability: product.availability === "sold"
+        ? "https://schema.org/OutOfStock"
+        : "https://schema.org/InStock",
+      seller: {
+        "@type": "Organization",
+        name: store.name,
+        url: absoluteUrl(`/stores/${store.slug}`),
+      },
+    },
+  };
 
   return (
     <div className="product-page">
+      <script
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(productJsonLd) }}
+        type="application/ld+json"
+      />
       <ProductDetail product={product} socialProof={socialProof} store={store} viewerStoreId={sellerSession?.storeId} />
       <section className="page related-section">
         <SectionHeading

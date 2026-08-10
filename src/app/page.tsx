@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { catalogRepository } from "@/data/repository";
 import { discoveryCollections, homeEditorialImage } from "@/data/editorial-data";
 import { SmartImage } from "@/components/smart-image";
@@ -14,6 +15,9 @@ import { EmptyState } from "@/components/empty-state";
 import { selectHomeFeature } from "@/lib/home-feature";
 
 export const revalidate = 60;
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+};
 
 export default async function HomePage() {
   const [products, movingProducts, stores, drops] = await Promise.all([
@@ -39,7 +43,7 @@ export default async function HomePage() {
             Browse current pieces, compare the details that matter, then send one clear enquiry to
             the store on WhatsApp.
           </p>
-          <HomeRichSearch drops={drops} products={products} stores={stores} />
+          <HomeRichSearch />
         </div>
         <Link className="home-feature" href={feature ? `/products/${feature.slug}` : "/discover"}>
             <SmartImage

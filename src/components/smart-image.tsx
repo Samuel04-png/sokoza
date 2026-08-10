@@ -18,6 +18,18 @@ function unsplashLoader({ src, width, quality }: ImageLoaderProps) {
   return url.toString();
 }
 
+function supabaseImageLoader({ src, width, quality }: ImageLoaderProps) {
+  const url = new URL(src);
+  url.pathname = url.pathname.replace(
+    "/storage/v1/object/public/",
+    "/storage/v1/render/image/public/",
+  );
+  url.searchParams.set("quality", String(quality ?? 75));
+  url.searchParams.set("resize", "contain");
+  url.searchParams.set("width", String(width));
+  return url.toString();
+}
+
 export function SmartImage({
   alt,
   fallbackLabel = "Image unavailable",
@@ -36,12 +48,13 @@ export function SmartImage({
     retry > 0 && typeof src === "string" && src.startsWith("https://")
       ? `${src}${src.includes("?") ? "&" : "?"}sokoza_retry=${retry}`
       : src;
-  const imageLoader = typeof source === "string" && source.startsWith("https://images.unsplash.com/")
-    ? unsplashLoader
+  const imageLoader = typeof source === "string"
+    ? source.startsWith("https://images.unsplash.com/")
+      ? unsplashLoader
+      : source.startsWith("https://kzixedushlpthxehqoho.supabase.co/storage/v1/object/public/")
+        ? supabaseImageLoader
+        : loader
     : loader;
-  const isSupabaseStorageImage = typeof source === "string"
-    && source.startsWith("https://kzixedushlpthxehqoho.supabase.co/storage/v1/object/public/");
-
   if (failed || !source) {
     return (
       <div className={`image-fallback ${props.className ?? ""}`} role="img" aria-label={alt}>
@@ -63,7 +76,7 @@ export function SmartImage({
       preload={Boolean(priority)}
       quality={quality ?? (preferences.reducedData ? 55 : 75)}
       src={source}
-      unoptimized={unoptimized ?? isSupabaseStorageImage}
+      unoptimized={unoptimized}
       {...props}
     />
   );

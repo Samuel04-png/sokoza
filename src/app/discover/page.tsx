@@ -21,7 +21,11 @@ import { EmptyState } from "@/components/empty-state";
 import { buildCurrentReleases } from "@/lib/discovery-sections";
 import { PRODUCT_CATEGORIES } from "@/lib/product-taxonomy";
 
-export const metadata: Metadata = { title: "Discover" };
+export const metadata: Metadata = {
+  title: "Discover",
+  description: "Search current products, local fashion stores, sizes, occasions, and visual moods across SOKOZA.",
+  alternates: { canonical: "/discover" },
+};
 
 const categories = PRODUCT_CATEGORIES;
 const occasions = ["Everyday", "Work", "Weekend", "Dinner", "Event"];

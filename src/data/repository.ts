@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { createSupabasePublicClient } from "@/lib/supabase/public";
 import { deriveProductAvailability } from "@/lib/product-availability";
 import type {
@@ -264,16 +265,29 @@ async function listStores(ids?: string[]) {
   return stores.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 }
 
+const listAllProducts = cache(() => listProducts());
+const listMovingProducts = cache(() => listProducts(undefined, true));
+const listAllStores = cache(() => listStores());
+const getProductBySlug = cache(async (slug: string) => {
+  const { data, error } = await createSupabasePublicClient().from("products").select(productSelect).eq("slug", slug).in("status", ["published", "sold_out"]).maybeSingle();
+  return error || !data ? null : mapProduct(data as unknown as PublicProductRow);
+});
+const getStoreBySlug = cache(async (slug: string) => {
+  const { data, error } = await createSupabasePublicClient().from("stores").select(storeSelect).eq("slug", slug).in("status", ["published", "paused"]).maybeSingle();
+  return error || !data ? null : mapStore(data as unknown as PublicStoreRow);
+});
+const getStoreById = cache(async (id: string) => {
+  const { data, error } = await createSupabasePublicClient().from("stores").select(storeSelect).eq("id", id).in("status", ["published", "paused"]).maybeSingle();
+  return error || !data ? null : mapStore(data as unknown as PublicStoreRow);
+});
+
 export const catalogRepository: CatalogRepository = {
-  listProducts: () => listProducts(),
-  listMovingProducts: () => listProducts(undefined, true),
+  listProducts: listAllProducts,
+  listMovingProducts,
   async searchProducts(query) {
     return listProducts(await searchEntityIds(query, "product"));
   },
-  async getProductBySlug(slug) {
-    const { data, error } = await createSupabasePublicClient().from("products").select(productSelect).eq("slug", slug).in("status", ["published", "sold_out"]).maybeSingle();
-    return error || !data ? null : mapProduct(data as unknown as PublicProductRow);
-  },
+  getProductBySlug,
   async getProductSocialProof(productId) {
     const { data, error } = await createSupabasePublicClient().rpc("get_product_social_proof", { p_product_ids: [productId] });
     if (error || !Array.isArray(data) || !data[0]) return null;
@@ -282,18 +296,12 @@ export const catalogRepository: CatalogRepository = {
     if (!Number.isFinite(count) || count < 1) return null;
     return row.window_label === "today" ? `Viewed by ${count} shoppers today` : `${count} people viewed this piece this week`;
   },
-  listStores: () => listStores(),
+  listStores: listAllStores,
   async searchStores(query) {
     return listStores(await searchRelatedStoreIds(query));
   },
-  async getStoreBySlug(slug) {
-    const { data, error } = await createSupabasePublicClient().from("stores").select(storeSelect).eq("slug", slug).in("status", ["published", "paused"]).maybeSingle();
-    return error || !data ? null : mapStore(data as unknown as PublicStoreRow);
-  },
-  async getStoreById(id) {
-    const { data, error } = await createSupabasePublicClient().from("stores").select(storeSelect).eq("id", id).in("status", ["published", "paused"]).maybeSingle();
-    return error || !data ? null : mapStore(data as unknown as PublicStoreRow);
-  },
+  getStoreBySlug,
+  getStoreById,
   async listDrops() {
     const { data, error } = await createSupabasePublicClient().from("drops").select("id, slug, store_id, title, subtitle, status, cover_path, published_at, created_at, drop_products(product_id, sort_order)").in("status", ["published", "ended"]).order("published_at", { ascending: false }).limit(40);
     return error || !data ? [] : (data as unknown as PublicDropRow[]).map(mapDrop);

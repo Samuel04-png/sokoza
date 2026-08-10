@@ -8,22 +8,24 @@ import { useOptionalMarketplaceSignals } from "@/components/marketplace-signals-
 import { productionDiscoverSuggestionSource } from "@/lib/discover-search";
 import type { Drop, Product, Store } from "@/lib/types";
 
-export function HomeRichSearch({
-  drops,
-  products,
-  stores,
-}: {
-  drops: Drop[];
-  products: Product[];
-  stores: Store[];
-}) {
+interface HomeRichSearchProps {
+  drops?: Drop[];
+  products?: Product[];
+  stores?: Store[];
+}
+
+export function HomeRichSearch({ drops = [], products = [], stores = [] }: HomeRichSearchProps = {}) {
   const router = useRouter();
   const { state } = useSellerStudio();
   const signals = useOptionalMarketplaceSignals();
   const [query, setQuery] = useState("");
-  const currentProducts = [...products.filter((product) => product.storeId !== state.store.id), ...state.products.filter((product) => product.status === "published")];
-  const currentStores = stores.map((store) => store.id === state.store.id ? {
-    ...store,
+  const currentProducts = [
+    ...products.filter((product) => product.storeId !== state.store.id),
+    ...state.products.filter((product) => product.status === "published"),
+  ];
+  const currentStores = state.store.operatingState === "published" ? [...stores.filter((store) => store.id !== state.store.id), {
+    id: state.store.id,
+    slug: state.store.slug,
     name: state.store.name,
     tagline: state.store.tagline,
     description: state.store.description,
@@ -31,8 +33,17 @@ export function HomeRichSearch({
     coverImage: state.store.coverImage,
     avatarImage: state.store.avatarImage,
     categories: state.store.categories,
-    status: state.store.operatingState === "published" ? "active" as const : "temporarily_closed" as const,
-  } : store);
+    status: "active" as const,
+    serviceAreas: [state.store.city].filter(Boolean),
+    whatsapp: state.store.whatsapp,
+    verification: [],
+    joinedAt: new Date(0).toISOString(),
+    fulfilment: {
+      collection: state.store.collection,
+      delivery: state.store.delivery,
+      exchanges: state.store.exchanges,
+    },
+  }] : stores;
 
   return (
     <RichDiscoverSearch

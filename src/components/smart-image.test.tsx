@@ -7,8 +7,10 @@ vi.mock("@/components/buyer-state", () => ({
 }));
 
 describe("SmartImage", () => {
-  it("loads public Supabase media directly instead of through the timing-out optimizer", () => {
+  it("routes public Supabase media through responsive Smart CDN transforms", () => {
     render(<SmartImage alt="Store cover" height={300} src="https://kzixedushlpthxehqoho.supabase.co/storage/v1/object/public/store-media/seller/store/cover.png" width={600} />);
-    expect(screen.getByRole("img", { name: "Store cover" }).getAttribute("src")).toBe("https://kzixedushlpthxehqoho.supabase.co/storage/v1/object/public/store-media/seller/store/cover.png");
+    const source = screen.getByRole("img", { name: "Store cover" }).getAttribute("src") ?? "";
+    expect(source).toContain("/storage/v1/render/image/public/");
+    expect(source).toMatch(/[?&]width=\d+/);
   });
 });
