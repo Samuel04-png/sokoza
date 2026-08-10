@@ -10,7 +10,7 @@ import { canonicalVariantAvailability, hasSellableVariant } from "@/lib/seller-p
 import { classifyProductVibes } from "@/lib/product-vibes";
 import { classifyProductTaxonomy } from "@/lib/product-taxonomy";
 import { hasExplicitMadeHereEvidence } from "@/lib/discovery-sections";
-import { productSlug } from "@/lib/product-slug";
+import { dropSlug, productSlug } from "@/lib/product-slug";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const storeSchema = z.object({
@@ -61,6 +61,7 @@ const payloadSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("save_product"), product: productSchema, onboarding: onboardingProgressSchema.optional() }),
   z.object({ operation: z.literal("set_product_status"), productId: z.uuid(), status: z.enum(["draft", "published", "hidden", "sold_out", "archived"]), expectedVersion: z.number().int().positive() }),
   z.object({ operation: z.literal("set_availability"), productIds: z.array(z.uuid()).min(1).max(100), availability: z.enum(["available", "low", "sold", "stale"]) }),
+  z.object({ operation: z.literal("set_product_promotion"), productId: z.uuid(), promotionPrice: z.number().positive().max(100_000_000).nullable(), expectedVersion: z.number().int().positive() }),
   z.object({ operation: z.literal("save_drop"), drop: dropSchema }),
   z.object({ operation: z.literal("archive_drop"), dropId: z.uuid() }),
   z.object({ operation: z.literal("set_enquiry_status"), enquiryId: z.uuid(), status: z.enum(["new", "contacted", "awaiting_buyer", "completed_elsewhere", "closed"]) }),
@@ -98,7 +99,7 @@ function condition(value: "New" | "Like new" | "Good" | "Made to order") {
 
 function failure(error: { message?: string; code?: string; details?: string } | null, fallback = "SAVE_FAILED", requestId = randomUUID()) {
   if (process.env.NODE_ENV !== "production") console.error(`[seller-studio] requestId=${requestId} fallback=${fallback} code=${error?.code ?? "unknown"} message=${error?.message ?? "unknown"} details=${error?.details ?? "none"}`);
-  const typed = error?.message?.match(/(VERSION_CONFLICT|PRODUCT_NOT_READY|STORE_NOT_READY|FORBIDDEN|INVALID_[A-Z_]+|ORDER_INTENT_NOT_FOUND)/)?.[1];
+  const typed = error?.message?.match(/(VERSION_CONFLICT|PRODUCT_NOT_READY|DROP_NOT_READY|STORE_NOT_READY|FORBIDDEN|INVALID_[A-Z_]+|ORDER_INTENT_NOT_FOUND)/)?.[1];
   if (typed) return NextResponse.json({ error: typed }, { status: typed === "FORBIDDEN" ? 403 : typed.includes("CONFLICT") ? 409 : 422 });
   if (error?.code === "23505") return NextResponse.json({ error: "SLUG_CONFLICT" }, { status: 409 });
   const dependencyUnavailable = error?.code === "42P01" || error?.code === "PGRST205" || /timeout|connection|schema cache/i.test(error?.message ?? "");
@@ -418,6 +419,52 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, products: refreshedProducts ?? [] });
   }
 
+  if (parsed.data.operation === "set_product_promotion") {
+    if (!session.storeId) return NextResponse.json({ error: "STORE_REQUIRED", requestId }, { status: 422 });
+    const input = parsed.data;
+    const { data: product, error: readError } = await supabase
+      .from("products")
+      .select("id, slug, status, regular_price, promotion_price, version")
+      .eq("id", input.productId)
+      .eq("store_id", session.storeId)
+      .maybeSingle();
+    if (readError) return failure(readError, "PROMOTION_READ_FAILED", requestId);
+    if (!product) return NextResponse.json({ error: "FORBIDDEN", requestId }, { status: 403 });
+    if (product.version !== input.expectedVersion) {
+      return NextResponse.json({ error: "VERSION_CONFLICT", code: "VERSION_CONFLICT", currentVersion: product.version, currentStatus: product.status, requestId }, { status: 409 });
+    }
+    if (product.status !== "published") {
+      return NextResponse.json({ error: "PRODUCT_NOT_PUBLISHED", code: "PRODUCT_NOT_PUBLISHED", message: "Publish this product before starting a promotion.", requestId }, { status: 422 });
+    }
+    const regularPrice = Number(product.regular_price);
+    if (input.promotionPrice !== null && input.promotionPrice >= regularPrice) {
+      return NextResponse.json({ error: "INVALID_PROMOTION_PRICE", code: "INVALID_PROMOTION_PRICE", message: "The promotional price must be lower than the regular price.", requestId }, { status: 422 });
+    }
+    const { data: savedPromotion, error: saveError } = await supabase
+      .from("products")
+      .update({ promotion_price: input.promotionPrice })
+      .eq("id", input.productId)
+      .eq("store_id", session.storeId)
+      .eq("version", input.expectedVersion)
+      .select("id, slug, regular_price, promotion_price, version")
+      .maybeSingle();
+    if (saveError) return failure(saveError, "PROMOTION_SAVE_FAILED", requestId);
+    if (!savedPromotion) return NextResponse.json({ error: "VERSION_CONFLICT", code: "VERSION_CONFLICT", requestId }, { status: 409 });
+    revalidatePath("/");
+    revalidatePath("/discover");
+    revalidatePath(`/products/${savedPromotion.slug}`);
+    return NextResponse.json({
+      ok: true,
+      requestId,
+      product: {
+        id: savedPromotion.id,
+        version: savedPromotion.version,
+        price: savedPromotion.promotion_price === null ? Number(savedPromotion.regular_price) : Number(savedPromotion.promotion_price),
+        previousPrice: savedPromotion.promotion_price === null ? null : Number(savedPromotion.regular_price),
+      },
+    });
+  }
+
   if (parsed.data.operation === "save_drop") {
     if (!session.storeId) return NextResponse.json({ error: "STORE_REQUIRED" }, { status: 422 });
     const drop = parsed.data.drop;
@@ -425,16 +472,17 @@ export async function POST(request: Request) {
       ? (await supabase.from("products").select("id, status").eq("store_id", session.storeId).in("id", drop.productIds)).data ?? []
       : [];
     if (ownedProducts.length !== drop.productIds.length || (drop.status === "live" && ownedProducts.some((product) => product.status !== "published"))) return NextResponse.json({ error: "INVALID_DROP_PRODUCTS" }, { status: 422 });
+    const { data: existingDrop, error: existingDropError } = await supabase.from("drops").select("id, slug, status, version").eq("id", drop.id).eq("store_id", session.storeId).maybeSingle();
+    if (existingDropError) return failure(existingDropError, "DROP_READ_FAILED", requestId);
     const values = {
-      id: drop.id, store_id: session.storeId, slug: slugify(drop.slug || drop.title), title: drop.title, subtitle: drop.subtitle,
+      id: drop.id, store_id: session.storeId, slug: dropSlug(drop.title, drop.id, existingDrop?.slug), title: drop.title, subtitle: drop.subtitle,
       cover_path: ownedStoragePath(drop.coverImage, "store-media", session.sellerId),
     };
-    const { data: existingDrop } = await supabase.from("drops").select("id").eq("id", drop.id).eq("store_id", session.storeId).maybeSingle();
     const dropWrite = existingDrop
       ? supabase.from("drops").update({ slug: values.slug, title: values.title, subtitle: values.subtitle, cover_path: values.cover_path }).eq("id", drop.id).eq("store_id", session.storeId)
       : supabase.from("drops").insert(values);
     const { data, error } = await dropWrite.select("id, version, slug, status, published_at").single();
-    if (error || !data) return failure(error, "DROP_SAVE_FAILED");
+    if (error || !data) return failure(error, "DROP_SAVE_FAILED", requestId);
     const { error: clearError } = await supabase.from("drop_products").delete().eq("drop_id", drop.id);
     if (clearError) return failure(clearError, "DROP_PRODUCTS_SAVE_FAILED");
     if (drop.productIds.length) {
@@ -443,7 +491,10 @@ export async function POST(request: Request) {
     }
     const canonicalStatus = drop.status === "live" ? "published" : drop.status === "past" ? "ended" : "draft";
     const { data: statusData, error: statusError } = await supabase.rpc("set_drop_status", { p_drop_id: drop.id, p_status: canonicalStatus });
-    if (statusError) return failure(statusError, "DROP_STATUS_FAILED");
+    if (statusError) return failure(statusError, "DROP_STATUS_FAILED", requestId);
+    revalidatePath("/");
+    revalidatePath("/discover");
+    revalidatePath(`/drops/${values.slug}`);
     return NextResponse.json({ ok: true, drop: statusData ?? data });
   }
 

@@ -40,6 +40,7 @@ interface SellerStudioContextValue {
   archiveProduct(id: string): void;
   restoreProduct(id: string): void;
   setAvailability(ids: string[], availability: Availability): void;
+  setProductPromotion(productId: string, promotionPrice: number | null): Promise<{ saved: boolean; error?: string }>;
   saveDrop(drop: Omit<SellerStudioDrop, "updatedAt">): SellerStudioDrop;
   archiveDrop(id: string): void;
   setEnquiryStatus(id: string, status: SellerEnquiryStatus): void;
@@ -101,6 +102,11 @@ function writeMessage(code: string) {
   if (code === "INVALID_SELLER_UPDATE") return "One of the product fields is not valid. Check the highlighted details and retry.";
   if (code === "STORE_NOT_READY") return "Complete the Store identity, imagery, WhatsApp and fulfilment fields before publishing.";
   if (code === "PRODUCT_NOT_READY") return "This product is not ready to publish. Check its Store, photos, price, options and availability.";
+  if (code === "DROP_NOT_READY") return "Publish your Store and add a cover, story and at least one published product before publishing this Drop.";
+  if (code === "INVALID_DROP_PRODUCTS") return "A live Drop can only contain published products from your Store.";
+  if (code === "INVALID_PROMOTION_PRICE") return "The promotional price must be lower than the regular price.";
+  if (code === "PRODUCT_NOT_PUBLISHED") return "Publish this product before starting a promotion.";
+  if (code === "PROMOTION_SAVE_FAILED") return "The promotion could not be saved. Your current product price is unchanged.";
   if (code === "STORE_REQUIRED") return "Create and save your Store before adding products.";
   if (code === "INVALID_CATEGORY" || code === "INVALID_CITY") return "Choose a supported category and city.";
   if (code === "CATEGORY_REQUIRED") return "Choose at least one category.";
@@ -410,6 +416,58 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
     });
   }, [commit, persist]);
 
+  const setProductPromotion = useCallback(async (productId: string, promotionPrice: number | null) => {
+    const product = stateRef.current.products.find((item) => item.id === productId);
+    if (!product) return { saved: false, error: "This product is no longer available." };
+    if (!persistenceEnabled) {
+      commit((current) => ({ ...current, products: current.products.map((item) => item.id === productId ? {
+        ...item,
+        price: promotionPrice ?? item.previousPrice ?? item.price,
+        previousPrice: promotionPrice === null ? undefined : item.price,
+      } : item) }));
+      return { saved: true };
+    }
+
+    errorRef.current = "";
+    setPersistenceError("");
+    setPendingWrites((count) => count + 1);
+    try {
+      const response = await fetch("/api/seller/studio", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ operation: "set_product_promotion", productId, promotionPrice, expectedVersion: product.version }),
+      });
+      const result = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (!response.ok) {
+        const code = typeof result.code === "string" ? result.code : typeof result.error === "string" ? result.error : "PROMOTION_SAVE_FAILED";
+        const message = typeof result.message === "string" ? result.message : writeMessage(code);
+        errorRef.current = message;
+        setPersistenceError(message);
+        if (typeof result.currentVersion === "number") commit((current) => ({
+          ...current,
+          products: current.products.map((item) => item.id === productId ? { ...item, version: result.currentVersion as number } : item),
+        }));
+        return { saved: false, error: message };
+      }
+      const row = result.product && typeof result.product === "object" && !Array.isArray(result.product) ? result.product as Record<string, unknown> : {};
+      commit((current) => ({ ...current, products: current.products.map((item) => item.id === productId ? {
+        ...item,
+        price: typeof row.price === "number" ? row.price : item.price,
+        previousPrice: typeof row.previousPrice === "number" ? row.previousPrice : undefined,
+        version: typeof row.version === "number" ? row.version : item.version,
+        updatedAt: new Date().toISOString(),
+      } : item) }));
+      return { saved: true };
+    } catch {
+      const message = writeMessage("PROMOTION_SAVE_FAILED");
+      errorRef.current = message;
+      setPersistenceError(message);
+      return { saved: false, error: message };
+    } finally {
+      setPendingWrites((count) => Math.max(0, count - 1));
+    }
+  }, [commit, persistenceEnabled]);
+
   const saveDrop = useCallback((drop: Omit<SellerStudioDrop, "updatedAt">) => {
     const result = { ...drop, updatedAt: new Date().toISOString() };
     commit((current) => ({
@@ -419,7 +477,16 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
         : [result, ...current.drops],
       audit: [audit("drop", drop.id, "Drop saved"), ...current.audit],
     }));
-    persist({ operation: "save_drop", drop });
+    persist({ operation: "save_drop", drop }, (response) => {
+      const row = response.drop && typeof response.drop === "object" && !Array.isArray(response.drop) ? response.drop as Record<string, unknown> : {};
+      commit((current) => ({ ...current, drops: current.drops.map((item) => item.id === drop.id ? {
+        ...item,
+        slug: typeof row.slug === "string" ? row.slug : item.slug,
+        status: row.status === "published" ? "live" : row.status === "ended" || row.status === "archived" ? "past" : "draft",
+        publishedAt: typeof row.published_at === "string" ? row.published_at : item.publishedAt,
+        updatedAt: new Date().toISOString(),
+      } : item) }));
+    });
     return result;
   }, [commit, persist]);
 
@@ -538,6 +605,7 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
     archiveProduct: (productId) => setProductStatus(productId, "archived"),
     restoreProduct: (productId) => setProductStatus(productId, "draft"),
     setAvailability,
+    setProductPromotion,
     saveDrop,
     archiveDrop,
     setEnquiryStatus,
@@ -547,7 +615,7 @@ export function SellerStudioProvider({ children, initialState = initialSellerStu
     updateSellerName,
     updateOnboarding,
     saveOnboardingStep,
-  }), [archiveDrop, archiveStore, duplicateProduct, flushWrites, hydrated, markAllNotificationsRead, markNotification, pauseStore, pendingWrites, persistenceError, publishStore, saveDrop, saveOnboardingStep, saveProduct, saveStoreDraft, setAvailability, setEnquiryStatus, setProductStatus, state, updateOnboarding, updatePreferences, updateSellerName]);
+  }), [archiveDrop, archiveStore, duplicateProduct, flushWrites, hydrated, markAllNotificationsRead, markNotification, pauseStore, pendingWrites, persistenceError, publishStore, saveDrop, saveOnboardingStep, saveProduct, saveStoreDraft, setAvailability, setEnquiryStatus, setProductPromotion, setProductStatus, state, updateOnboarding, updatePreferences, updateSellerName]);
 
   return <SellerStudioContext.Provider value={value}>{children}</SellerStudioContext.Provider>;
 }

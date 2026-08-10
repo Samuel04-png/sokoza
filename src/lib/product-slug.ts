@@ -19,3 +19,11 @@ export function productSlug(title: string, productId: string, existingSlug?: str
   const suffix = productId.replace(/[^a-f0-9]/gi, "").slice(0, 8).toLocaleLowerCase();
   return `${slugifyProductTitle(title) || "piece"}-${suffix || "product"}`;
 }
+
+export function dropSlug(title: string, dropId: string, existingSlug?: string | null) {
+  const stableSlug = existingSlug?.trim();
+  if (stableSlug) return stableSlug;
+
+  const suffix = dropId.replace(/[^a-f0-9]/gi, "").slice(0, 8).toLocaleLowerCase();
+  return `${slugifyProductTitle(title) || "drop"}-${suffix || "collection"}`;
+}

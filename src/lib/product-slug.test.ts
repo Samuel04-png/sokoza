@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productSlug } from "@/lib/product-slug";
+import { dropSlug, productSlug } from "@/lib/product-slug";
 
 describe("productSlug", () => {
   it("allows separate products to share the same title", () => {
@@ -12,5 +12,14 @@ describe("productSlug", () => {
   it("preserves the public URL when a product title changes", () => {
     expect(productSlug("A completely new title", "81cf8ec7-9445-4c16-8245-43d91e446705", "original-piece"))
       .toBe("original-piece");
+  });
+});
+
+describe("dropSlug", () => {
+  it("keeps collections with the same name unique across Stores", () => {
+    expect(dropSlug("Sunday Edit", "bd99d58e-0fc6-47a5-948c-e130e875b881"))
+      .toBe("sunday-edit-bd99d58e");
+    expect(dropSlug("Sunday Edit", "81cf8ec7-9445-4c16-8245-43d91e446705"))
+      .toBe("sunday-edit-81cf8ec7");
   });
 });

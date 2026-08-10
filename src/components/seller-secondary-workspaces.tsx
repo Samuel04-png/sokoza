@@ -7,30 +7,50 @@ import { Icon } from "@/components/icon";
 import { SmartImage } from "@/components/smart-image";
 import { useSellerStudio } from "@/components/seller-studio-provider";
 import { formatPrice } from "@/lib/format";
-import { productToInput } from "@/lib/seller-studio-types";
 import { emptyProductMetrics, validComparisonChange } from "@/lib/marketplace-ranking";
 import { sellerEmailChangeMessage } from "@/lib/seller-account";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export function SellerPromotions() {
-  const { state, saveProduct } = useSellerStudio();
-  const eligible = state.products.filter((product) => product.status === "published");
+  const { state, setProductPromotion } = useSellerStudio();
+  const published = state.products.filter((product) => product.status === "published");
+  const eligible = published.filter((product) => !product.previousPrice);
   const [productId, setProductId] = useState(eligible[0]?.id ?? "");
   const [price, setPrice] = useState(eligible[0]?.price ? Math.max(1, eligible[0].price - 100) : 0);
   const [notice, setNotice] = useState("");
   const selected = eligible.find((product) => product.id === productId);
-  const promoted = eligible.filter((product) => product.previousPrice && product.previousPrice > product.price);
+  const promoted = published.filter((product) => product.previousPrice && product.previousPrice > product.price);
 
-  function startPromotion() {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function startPromotion() {
     if (!selected || price <= 0 || price >= selected.price) return;
-    saveProduct({ ...productToInput(selected), price, previousPrice: selected.price });
+    setSaving(true);
+    setError("");
+    const result = await setProductPromotion(selected.id, price);
+    setSaving(false);
+    if (!result.saved) {
+      setError(result.error ?? "The promotion could not be saved.");
+      return;
+    }
     setNotice(`${selected.title} now shows a promotional price of ${formatPrice(price)}.`);
+    const next = eligible.find((product) => product.id !== selected.id);
+    setProductId(next?.id ?? "");
+    setPrice(next ? Math.max(1, next.price - 100) : 0);
   }
 
-  function endPromotion(productId: string) {
+  async function endPromotion(productId: string) {
     const product = state.products.find((item) => item.id === productId);
     if (!product?.previousPrice) return;
-    saveProduct({ ...productToInput(product), price: product.previousPrice, previousPrice: undefined });
+    setSaving(true);
+    setError("");
+    const result = await setProductPromotion(productId, null);
+    setSaving(false);
+    if (!result.saved) {
+      setError(result.error ?? "The promotion could not be ended.");
+      return;
+    }
     setNotice(`${product.title} returned to its previous current price.`);
   }
 
@@ -38,9 +58,10 @@ export function SellerPromotions() {
     <div className="seller-page seller-promotions-page">
       <header className="seller-page-header"><div><p className="eyebrow">Truthful price promotion</p><h1>Promotions</h1><p>Show a real current reduction on selected products. SOKOZA displays both prices clearly.</p></div></header>
       {notice ? <div className="seller-inline-success" role="status"><Icon name="tick" size={18} /> {notice}<button aria-label="Dismiss" onClick={() => setNotice("")} type="button"><Icon name="close" size={16} /></button></div> : null}
+      {error ? <div className="seller-inline-error" role="alert"><Icon name="alert" size={18} /> {error}</div> : null}
       <div className="seller-promotions-layout">
-        <section className="seller-promotion-builder"><p className="eyebrow">Create a promotion</p><h2>Reduce one current price</h2><label>Product<select onChange={(event) => { const next = eligible.find((product) => product.id === event.target.value); setProductId(event.target.value); setPrice(next ? Math.max(1, next.price - 100) : 0); }} value={productId}>{eligible.map((product) => <option key={product.id} value={product.id}>{product.title} · {formatPrice(product.price)}</option>)}</select></label>{selected ? <div className="seller-promotion-product"><span><SmartImage alt="" fill sizes="84px" src={selected.images[0]} /></span><div><strong>{selected.title}</strong><small>Current price {formatPrice(selected.price)}</small></div></div> : null}<label>Promotional price (ZMW)<div className="seller-money-input"><span>K</span><input max={selected ? selected.price - 1 : undefined} min="1" onChange={(event) => setPrice(Number(event.target.value))} type="number" value={price || ""} /></div></label>{selected && price >= selected.price ? <p className="seller-validation invalid"><Icon name="alert" size={17} /> Promotional price must be below {formatPrice(selected.price)}.</p> : null}<button className="button primary full" disabled={!selected || price <= 0 || price >= selected.price} onClick={startPromotion} type="button">Start promotion</button><small>There is no coupon code. Buyers see the price reduction before they prepare an enquiry.</small></section>
-        <section><div className="seller-section-heading"><div><p className="eyebrow">Current</p><h2>Active promotions</h2></div><span>{promoted.length}</span></div>{promoted.length ? <div className="seller-active-promotions">{promoted.map((product) => <article key={product.id}><span><SmartImage alt="" fill sizes="72px" src={product.images[0]} /></span><div><strong>{product.title}</strong><p><del>{formatPrice(product.previousPrice!)}</del> {formatPrice(product.price)}</p><small>{Math.round((1 - product.price / product.previousPrice!) * 100)}% lower</small></div><button className="seller-text-action" onClick={() => endPromotion(product.id)} type="button">End promotion</button></article>)}</div> : <div className="seller-empty-state compact"><Icon name="bookmark" size={28} /><h3>No active promotions</h3><p>A reduced price will appear here and on the buyer product card.</p></div>}</section>
+        <section className="seller-promotion-builder"><p className="eyebrow">Create a promotion</p><h2>Reduce one current price</h2><label>Product<select disabled={saving || !eligible.length} onChange={(event) => { const next = eligible.find((product) => product.id === event.target.value); setProductId(event.target.value); setPrice(next ? Math.max(1, next.price - 100) : 0); }} value={productId}>{eligible.length ? eligible.map((product) => <option key={product.id} value={product.id}>{product.title} · {formatPrice(product.price)}</option>) : <option value="">No published products available</option>}</select></label>{selected ? <div className="seller-promotion-product"><span><SmartImage alt="" fill sizes="84px" src={selected.images[0]} /></span><div><strong>{selected.title}</strong><small>Current price {formatPrice(selected.price)}</small></div></div> : null}<label>Promotional price (ZMW)<div className="seller-money-input"><span>K</span><input disabled={saving || !selected} max={selected ? selected.price - 1 : undefined} min="1" onChange={(event) => setPrice(Number(event.target.value))} type="number" value={price || ""} /></div></label>{selected && price >= selected.price ? <p className="seller-validation invalid"><Icon name="alert" size={17} /> Promotional price must be below {formatPrice(selected.price)}.</p> : null}<button className="button primary full" disabled={saving || !selected || price <= 0 || price >= selected.price} onClick={() => void startPromotion()} type="button">{saving ? "Saving…" : "Start promotion"}</button><small>There is no coupon code. Buyers see the price reduction before they prepare an enquiry.</small></section>
+        <section><div className="seller-section-heading"><div><p className="eyebrow">Current</p><h2>Active promotions</h2></div><span>{promoted.length}</span></div>{promoted.length ? <div className="seller-active-promotions">{promoted.map((product) => <article key={product.id}><span><SmartImage alt="" fill sizes="72px" src={product.images[0]} /></span><div><strong>{product.title}</strong><p><del>{formatPrice(product.previousPrice!)}</del> {formatPrice(product.price)}</p><small>{Math.round((1 - product.price / product.previousPrice!) * 100)}% lower</small></div><button className="seller-text-action" disabled={saving} onClick={() => void endPromotion(product.id)} type="button">End promotion</button></article>)}</div> : <div className="seller-empty-state compact"><Icon name="bookmark" size={28} /><h3>No active promotions</h3><p>A reduced price will appear here and on the buyer product card.</p></div>}</section>
       </div>
       <section className="seller-future-note"><div><Icon name="info" size={24} /></div><div><p className="eyebrow">Later release</p><h2>Coupons need reliable redemption evidence.</h2><p>Manual WhatsApp confirmation cannot consistently prove whether a code was redeemed. Coupon creation stays unavailable until orders and redemptions can be attributed safely.</p></div></section>
     </div>

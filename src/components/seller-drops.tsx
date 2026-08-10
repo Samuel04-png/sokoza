@@ -30,7 +30,7 @@ export function SellerDrops() {
 
 export function SellerDropEditor({ dropId }: { dropId?: string }) {
   const router = useRouter();
-  const { state, saveDrop, flushWrites } = useSellerStudio();
+  const { state, saveDrop, flushWrites, persistenceError } = useSellerStudio();
   const existing = dropId ? state.drops.find((drop) => drop.id === dropId) : undefined;
   const [draftId] = useState(existing?.id ?? crypto.randomUUID());
   const [title, setTitle] = useState(existing?.title ?? "");
@@ -55,6 +55,14 @@ export function SellerDropEditor({ dropId }: { dropId?: string }) {
   }
 
   async function persist(nextStatus: "draft" | "live" | "past") {
+    if (title.trim().length === 1) {
+      setError("Use at least two characters for the Drop title.");
+      return;
+    }
+    if (nextStatus === "live" && state.store.operatingState !== "published") {
+      setError("Publish your Store before making a Drop live.");
+      return;
+    }
     if (nextStatus === "live" && (!title.trim() || !subtitle.trim() || !coverImage || !productIds.length)) {
       setError("Add a title, story, cover and at least one published product before making this Drop live.");
       return;
@@ -62,7 +70,7 @@ export function SellerDropEditor({ dropId }: { dropId?: string }) {
     const id = draftId;
     saveDrop({ id, slug: existing?.slug ?? title.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""), title: title.trim() || "Untitled Drop", subtitle: subtitle.trim(), coverImage, productIds, status: nextStatus, publishedAt: nextStatus === "live" ? existing?.publishedAt ?? new Date().toISOString() : existing?.publishedAt });
     if (await flushWrites()) router.push(`/seller/drops/${id}?saved=1`);
-    else setError("This Drop was not saved. Review the save error and try again.");
+    else setError(persistenceError || "This Drop was not saved. Review the save error and try again.");
   }
 
   return (
